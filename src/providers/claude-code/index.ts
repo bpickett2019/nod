@@ -183,6 +183,26 @@ function stopReason(reason: unknown): StopReason {
   return 'stop';
 }
 
+function restoreStructured(value: JsonObject, schema: unknown): JsonObject {
+  const properties = (schema as { properties?: Record<string, { type?: unknown }> } | undefined)
+    ?.properties;
+  if (!properties) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => {
+      const type = properties[key]?.type;
+      if (typeof item !== 'string' || (type !== 'object' && type !== 'array')) return [key, item];
+      try {
+        const parsed: unknown = JSON.parse(item);
+        return parsed && typeof parsed === 'object' && Array.isArray(parsed) === (type === 'array')
+          ? [key, parsed]
+          : [key, item];
+      } catch {
+        return [key, item];
+      }
+    }),
+  ) as JsonObject;
+}
+
 function effortFor(model: Model<Api>, options: SimpleStreamOptions) {
   if (!options.reasoning) return undefined;
   const level = model.thinkingLevelMap?.[options.reasoning] ?? options.reasoning;
@@ -242,6 +262,7 @@ export function streamClaudeCode(
         description: tool.description,
         inputSchema: JSON.parse(JSON.stringify(tool.parameters)),
       }));
+      const schemas = new Map(tools.map((tool) => [tool.name, tool.inputSchema]));
       const content = transcript(withoutInitialSystemMessage(normalized.messages));
       const prompt = `${system ? getSystemMessageText(system) : ''}\n\n${transcriptFormat}`.trim();
       const limit = Math.min(options.maxTokens ?? model.maxTokens, model.maxTokens);
@@ -460,7 +481,7 @@ export function streamClaudeCode(
                 const value = block.json.trim() ? JSON.parse(block.json) : {};
                 if (!value || typeof value !== 'object' || Array.isArray(value))
                   throw new Error('not an object');
-                part.arguments = value as JsonObject;
+                part.arguments = restoreStructured(value as JsonObject, schemas.get(part.name));
               } catch {
                 part.argumentsError = `The tool arguments were not a JSON object: ${block.json.slice(0, 2000)}`;
               }
