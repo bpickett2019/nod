@@ -886,6 +886,7 @@ async function initializeApplication(
   const skillLibrary = createSkillLibrary(
     fileURLToPath(new URL('../runtime/skills/', import.meta.url)),
     coreSkills,
+    process.env.NOD_ORG_SKILLS || undefined,
   );
   const analyzeImages =
     adapters.imageCurator && createImageAnalysis(ledger.curator(adapters.imageCurator));

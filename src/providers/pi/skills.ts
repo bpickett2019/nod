@@ -3,18 +3,16 @@ import { basename, resolve, sep } from 'node:path';
 import { loadSkills } from '@earendil-works/pi-coding-agent';
 import type { SkillLibrary } from '../../ports/agent.ts';
 
-export function createSkillLibrary(
-  directory: string,
-  excluded: readonly string[] = [],
-): SkillLibrary {
+function checkedPath(base: string, file: string) {
+  const path = realpathSync(resolve(base, file));
+  if (!path.startsWith(base + sep) || !path.endsWith('.md'))
+    throw new Error('The skill file must be a Markdown file inside its skill directory.');
+  if (!statSync(path).isFile()) throw new Error('The skill file must be a regular file.');
+  return path;
+}
+
+function loadDirectory(directory: string, excluded: readonly string[]) {
   const root = realpathSync(directory);
-  const checkedPath = (base: string, file: string) => {
-    const path = realpathSync(resolve(base, file));
-    if (!path.startsWith(base + sep) || !path.endsWith('.md'))
-      throw new Error('The skill file must be a Markdown file inside its skill directory.');
-    if (!statSync(path).isFile()) throw new Error('The skill file must be a regular file.');
-    return path;
-  };
   const skillPaths = readdirSync(root, { withFileTypes: true })
     .filter(
       (entry) =>
@@ -33,17 +31,36 @@ export function createSkillLibrary(
     skills.length !== skillPaths.length ||
     skills.some((skill) => skill.name !== basename(skill.baseDir))
   )
-    throw new Error('The skill metadata is invalid.');
-  const enabled = skills.filter((skill) => !skill.disableModelInvocation);
-  const byName = new Map(enabled.map((skill) => [skill.name, skill.baseDir]));
+    throw new Error(`The skill metadata in ${directory} is invalid.`);
+  return skills
+    .filter((skill) => !skill.disableModelInvocation)
+    .map(({ name, description, baseDir }) => ({ name, description, base: baseDir, root }));
+}
+
+export function createSkillLibrary(
+  directory: string,
+  excluded: readonly string[] = [],
+  organization?: string,
+): SkillLibrary {
+  const root = realpathSync(directory);
+  const enabled = [
+    ...loadDirectory(root, excluded),
+    ...(organization ? loadDirectory(organization, []) : []),
+  ];
+  const names = enabled.map((skill) => skill.name);
+  if (new Set(names).size !== names.length || names.some((name) => excluded.includes(name)))
+    throw new Error('Organization skills must not reuse the name of a built-in guide.');
+  const byName = new Map(enabled.map((skill) => [skill.name, skill]));
   return {
     core: excluded,
     catalog: enabled.map(({ name, description }) => ({ name, description: description.trim() })),
     read(name: string, file = 'SKILL.md') {
-      const base = byName.get(name) ?? (excluded.includes(name) ? resolve(root, name) : undefined);
-      if (!base || !base.startsWith(root + sep))
+      const skill =
+        byName.get(name) ??
+        (excluded.includes(name) ? { base: resolve(root, name), root } : undefined);
+      if (!skill || !skill.base.startsWith(skill.root + sep))
         throw new Error('Select a skill from the skill library.');
-      return { name, file, content: readFileSync(checkedPath(base, file), 'utf8').trim() };
+      return { name, file, content: readFileSync(checkedPath(skill.base, file), 'utf8').trim() };
     },
   };
 }

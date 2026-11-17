@@ -48,6 +48,10 @@ The library has 27 task guides in [`src/runtime/skills`](https://github.com/n8n-
 
 Eight guides have a reference for one specific case: recurring meetings, data imports, government forms, catalog synchronization, corpus research, purchase claims, existing travel bookings and n8n Telegram workflows.
 
+## Organization guides
+
+Set `NOD_ORG_SKILLS` to a folder to add your organization's own task guides, such as internal procedures that don't belong in a public repository. Each guide is a folder with a `SKILL.md` and optional `references`, in the same format as the built-in guides. Nod reads the folder at startup and lists its guides with the built-in ones; restart Nod after a change. A guide can't reuse a built-in guide's name, and its reads stay inside its own folder. Organization guides are trusted like built-in guides, so keep the folder writable only by the people who maintain it. To give several Nod servers the same guides, keep the folder in a private repository and update each server's copy.
+
 ## How the model reads a guide
 
 The `skills` tool has these actions:

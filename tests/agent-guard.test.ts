@@ -1284,6 +1284,45 @@ test('skill reads cannot escape the trusted library or load workspace instructio
   }
 });
 
+test('organization guides join the built-in library without escaping their folder or replacing a guide', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'nod-org-skills-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const guide = async (root: string, name: string, body: string) => {
+    await mkdir(join(root, name, 'references'), { recursive: true });
+    await writeFile(
+      join(root, name, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Synthetic ${name} guide.\n---\n${body}`,
+    );
+  };
+  const builtIn = join(directory, 'built-in');
+  const organization = join(directory, 'organization');
+  await guide(builtIn, 'research', 'Built-in research guide');
+  await guide(builtIn, 'artifacts', 'Core artifacts guide');
+  await guide(organization, 'records-requests', 'Synthetic records procedure');
+  await writeFile(
+    join(organization, 'records-requests', 'references', 'agencies.md'),
+    'Synthetic agency rules',
+  );
+  await writeFile(join(directory, 'secret.md'), 'Outside the organization folder');
+  const library = createSkillLibrary(builtIn, ['artifacts'], organization);
+  assert.deepEqual(
+    library.catalog.map((skill) => skill.name),
+    ['research', 'records-requests'],
+  );
+  assert.match(library.read('records-requests').content, /Synthetic records procedure/);
+  assert.equal(
+    library.read('records-requests', 'references/agencies.md').content,
+    'Synthetic agency rules',
+  );
+  assert.match(library.read('artifacts').content, /Core artifacts guide/);
+  assert.throws(() => library.read('records-requests', '../../secret.md'));
+  await guide(organization, 'research', 'Replacement research guide');
+  assert.throws(() => createSkillLibrary(builtIn, ['artifacts'], organization), /built-in guide/);
+  await rm(join(organization, 'research'), { recursive: true });
+  await guide(organization, 'artifacts', 'Replacement core guide');
+  assert.throws(() => createSkillLibrary(builtIn, ['artifacts'], organization), /built-in guide/);
+});
+
 test('documentation search ranks sections, bounds reads and cannot read files outside its index', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'nod-documentation-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
