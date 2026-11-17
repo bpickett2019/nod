@@ -22,11 +22,13 @@ services:
       DOCKER_HOST: tcp://runtime:2375
       WORKSPACE_CONTAINER: nod-workspace-${COMPOSE_PROJECT_NAME:-nod-server}
       BROWSER_CONTAINER: nod-browser-${COMPOSE_PROJECT_NAME:-nod-server}
+      NOD_ORG_SKILLS: ${NOD_ORG_SKILLS:+/org-skills}
     ports:
       - '${NOD_BIND_ADDRESS:-127.0.0.1}:${PORT:-4310}:${PORT:-4310}'
     volumes:
       - server-data:/var/lib/nod
       - workspace-data:/var/lib/nod/workspaces
+      - ${NOD_ORG_SKILLS:-org-skills-unset}:/org-skills:ro
     tmpfs:
       - /tmp:uid=1000,gid=1000,mode=1777,size=256m
     read_only: true
@@ -219,3 +221,4 @@ volumes:
   browser-data:
   https-data:
   https-config:
+  org-skills-unset:
