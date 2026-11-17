@@ -19,7 +19,7 @@ Select **Add connection** (or **Add** when you already have a connection), then 
 | ---------------------------------- | --------------------------------------------------------- | ---------------------------------------- |
 | Google Gemini                      | [AI Studio API key](https://aistudio.google.com/api-keys) | Gemini 4 Argon, medium effort            |
 | OpenAI / ChatGPT                   | API key or existing ChatGPT sign-in                       | GPT-6.1 Sol / GPT-6 Sol, high effort     |
-| Anthropic                          | API key                                                   | Claude Opus 5.5, high effort             |
+| Anthropic                          | API key, or Claude Code signed in on the server           | Claude Opus 5.5, high effort             |
 | OpenRouter                         | API key or browser sign-in                                | GPT-6.1 Sol, high effort                 |
 | Google Vertex AI                   | Vertex API key                                            | Gemini 4 Argon, medium effort            |
 | Amazon Bedrock                     | API key and Region                                        | You choose the model and routing profile |
@@ -38,7 +38,7 @@ You can change the initial choice. Nod preserves a working choice when you add a
 Create a Gemini API key with your Google account in AI Studio. Nod recommends Gemini 4 Argon, which requires paid API access. Gemini 3.8 Flash is a lower-cost option with a [free tier](https://ai.google.dev/gemini-api/docs/pricing), subject to project quotas and availability. The model picker shows these access limits. The free tier has different data-use terms, so review Google's terms before sending private material.
 :::
 
-Google does not permit third-party assistants to reuse [Gemini CLI OAuth](https://geminicli.com/docs/resources/faq/). A Gemini app subscription is not a Nod sign-in option. Anthropic's [authentication conditions](https://code.claude.com/docs/en/legal-and-compliance) also require an API connection for Claude in Nod.
+Google does not permit third-party assistants to reuse [Gemini CLI OAuth](https://geminicli.com/docs/resources/faq/). A Gemini app subscription is not a Nod sign-in option. Anthropic's [authentication conditions](https://code.claude.com/docs/en/legal-and-compliance) don't let apps sign in to a Claude account or send requests with its credentials. A Claude plan connection never reads your Claude credentials: it runs the unmodified Claude Code program signed in on the computer that runs Nod. Read those conditions before you use it.
 
 ## Connect a service
 
@@ -97,7 +97,7 @@ ChatGPT sign-in listens on port `1455` where Nod's server runs. If another progr
 
 <Steps>
 
-1. Choose **Anthropic**.
+1. Choose **Anthropic**, then **Use an API key**.
 2. Paste your key into **API key**.
 3. Select **Connect**.
 
@@ -106,6 +106,20 @@ ChatGPT sign-in listens on port `1455` where Nod's server runs. If another progr
 Nod uses keys limited to one workspace directly. For other keys, Nod connects automatically when it finds exactly one workspace that accepts the key. If it finds several, choose a named **Workspace** and save again.
 
 If the connection fails because workspace discovery isn't available, **Enter workspace ID manually** appears. Enter the **Workspace ID (optional)** from [Anthropic's workspace settings](https://platform.claude.com/settings/workspaces), then save again. Your API key stays in the form while you choose. No environment variable is needed when connecting in Nod.
+
+</TabItem>
+<TabItem label="Claude plan">
+
+<Steps>
+
+1. On the computer that runs Nod, install [Claude Code](https://code.claude.com/docs/en/setup) and run `claude auth login` with your Claude account.
+2. In Nod, choose **Anthropic**, then **Use Claude Code sign-in**.
+
+</Steps>
+
+Nod checks `claude auth status` and needs a sign-in with a Claude plan, not an API key. For each model request, Nod runs `claude -p` with Claude Code's own tools turned off and Nod's tools listed for the model. When the model calls a tool, Nod stops Claude Code and runs that tool itself, so the trust check, approvals and Vault work as with any other connection. Requests use your plan's usage limits. Usage shows each request at its API-price estimate, and the [task check-in](/use/spending/#task-check-ins) counts that estimate.
+
+Nod starts Claude Code with only basic environment variables, so an `ANTHROPIC_API_KEY` in your shell or `.env` isn't used. New Claude models need a recent Claude Code; if a request says your version is too old, run `claude update`. If `claude` is installed in more than one place, update the one found first on the `PATH` of the program that starts Nod. The conversation reaches the model as one transcript per request, and Claude Code adds your account email and today's date to it. Nod doesn't keep the prompt cache warm between turns on this connection.
 
 </TabItem>
 <TabItem label="OpenRouter">

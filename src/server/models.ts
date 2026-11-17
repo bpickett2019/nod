@@ -210,6 +210,7 @@ function sameAccount(
   if (row.managed || row.provider !== provider || row.method !== method) return false;
   const saved = row.credential;
   if (value.type === 'oauth') return saved?.type === 'oauth' && saved.accountId === value.accountId;
+  if (value.type === 'claude_code') return saved?.type === 'claude_code';
   if (value.type === 'endpoint') return saved?.type === 'endpoint' && saved.url === value.url;
   return JSON.stringify(saved) === JSON.stringify(value);
 }
@@ -224,6 +225,7 @@ function connectionLabel(provider: ModelProvider, method: ModelMethod, value: Mo
   if (value.type === 'bedrock') return value.region;
   if (value.type === 'azure') return value.deployment;
   if (value.type === 'cloudflare') return value.gatewayId ?? value.accountId;
+  if (value.type === 'claude_code') return value.email ?? modelSource({ provider, method });
   return modelSource({ provider, method });
 }
 
@@ -403,7 +405,7 @@ export function createModelService(options: {
     const values = (
       value.type === 'oauth'
         ? [value.access, value.refresh, value.idToken]
-        : value.key
+        : value.type !== 'claude_code' && value.key
           ? [value.key]
           : []
     ).filter((secret) => typeof secret === 'string' && secret.length > 0 && !secrets.has(secret));
@@ -1298,6 +1300,40 @@ export function createModelService(options: {
         return save('compatible', 'api_key', value, definitions);
       });
     },
+    async connectClaudeCode(connectionId?: string) {
+      const connect = backend.connectClaudeCode;
+      if (!connect) throw new ConnectionError('Claude Code connections are unavailable.');
+      if (
+        connectionId &&
+        !rows.some(
+          (row) =>
+            row.id === connectionId &&
+            row.provider === 'anthropic' &&
+            row.method === 'subscription',
+        )
+      )
+        throw new ConnectionError('This model connection is unavailable.');
+      return tracked('anthropic', 'subscription', async () => {
+        await checkStorage();
+        const connected = await connect().catch((error) => {
+          throw new ConnectionError(
+            error instanceof ModelAuthError
+              ? error.message
+              : 'Nod couldn’t check the Claude Code sign-in. Try again.',
+          );
+        });
+        return save(
+          'anthropic',
+          'subscription',
+          connected.credential,
+          connected.models,
+          connectionId,
+          {
+            replace: !!connectionId,
+          },
+        );
+      });
+    },
     async select(input: ModelSelection, actor: SettingActor = 'owner', client?: PoolClient) {
       const value = modelSelectionInput.parse(input);
       checked = undefined;
@@ -1529,6 +1565,15 @@ export function createModelService(options: {
             .strict()
             .parse(request.body);
           await service.addEndpoint(input.url, input.key || undefined);
+          await service.checkSettled();
+          return service.view();
+        });
+        routes.post('/api/models/claude-code', async (request) => {
+          const input = z
+            .object({ connectionId: z.uuid().optional() })
+            .strict()
+            .parse(request.body ?? {});
+          await service.connectClaudeCode(input.connectionId);
           await service.checkSettled();
           return service.view();
         });

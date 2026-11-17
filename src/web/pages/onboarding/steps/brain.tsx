@@ -60,6 +60,7 @@ const common = providers.filter((item) => item.common);
 
 const hints: Partial<Record<ModelProvider, string>> = {
   openai: 'Sign in with your ChatGPT Plus or Pro plan, no extra cost',
+  anthropic: 'Use your Claude plan through Claude Code, or an API key',
 };
 
 const placeholders: Partial<Record<ModelProvider, string>> = {
@@ -170,6 +171,35 @@ function useConnect() {
     void flow.connect(provider);
   }
 
+  async function claudeCode() {
+    if (submitting.current) return;
+    clearError();
+    submitting.current = true;
+    setChecking(true);
+    try {
+      const result = await api<ModelsResponse>('/api/models/claude-code', {
+        method: 'POST',
+        body: '{}',
+      });
+      models.update(() => result);
+      setAnother(false);
+      setFresh(
+        result.connections.find(
+          (item) => item.provider === 'anthropic' && item.method === 'subscription',
+        )?.id,
+      );
+    } catch (cause) {
+      models.setError(
+        cause instanceof ApiError
+          ? errorMessage(cause)
+          : 'Nod couldn’t check the Claude Code sign-in. Try again.',
+      );
+    } finally {
+      submitting.current = false;
+      setChecking(false);
+    }
+  }
+
   return {
     models,
     flow,
@@ -185,6 +215,7 @@ function useConnect() {
     clearError,
     save,
     signIn,
+    claudeCode,
     addAnother: () => {
       models.setError('');
       setAnother(true);
@@ -447,19 +478,30 @@ function ServerForm({ c }: { c: Connect }) {
   );
 }
 
-function SignInFirst({ c, provider }: { c: Connect; provider: SignInProvider }) {
+function SignInFirst({ c, provider }: { c: Connect; provider: SignInProvider | 'anthropic' }) {
   const [key, setKey] = useState(false);
   return (
     <div className="ob-brain-signin">
       <div className="ob-brain-oauth">
-        <Button disabled={c.locked} autoFocus onClick={() => c.signIn(provider)}>
+        <Button
+          disabled={c.locked}
+          autoFocus
+          onClick={() => (provider === 'anthropic' ? void c.claudeCode() : c.signIn(provider))}
+        >
+          {c.checking && <LoaderCircle size={16} className="spin" aria-hidden="true" />}
           <Logo provider={provider} size={18} />
-          {provider === 'openai' ? 'Sign in with ChatGPT' : 'Sign in to OpenRouter'}
+          {provider === 'openai'
+            ? 'Sign in with ChatGPT'
+            : provider === 'anthropic'
+              ? 'Use Claude Code sign-in'
+              : 'Sign in to OpenRouter'}
         </Button>
         <p className="ob-brain-note">
           {provider === 'openai'
             ? 'Uses your ChatGPT Plus or Pro plan.'
-            : 'Creates a key for me and uses your OpenRouter credits.'}
+            : provider === 'anthropic'
+              ? 'Uses the Claude plan Claude Code is signed in with on this computer.'
+              : 'Creates a key for me and uses your OpenRouter credits.'}
         </p>
       </div>
       <Problem>{c.models.error}</Problem>
@@ -486,7 +528,8 @@ function SignInFirst({ c, provider }: { c: Connect; provider: SignInProvider }) 
 function Setup({ c, provider }: { c: Connect; provider: ModelProvider }) {
   if (c.signingIn) return <Waiting c={c} />;
   if (provider === 'compatible') return <ServerForm c={c} />;
-  if (signsIn(provider)) return <SignInFirst c={c} provider={provider} />;
+  if (signsIn(provider) || provider === 'anthropic')
+    return <SignInFirst c={c} provider={provider} />;
   return <KeyForm c={c} provider={provider} autoFocus />;
 }
 

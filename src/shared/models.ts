@@ -379,7 +379,9 @@ export const cloudflareGatewayPattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export function modelSource(connection: Pick<ModelConnection, 'provider' | 'method'>) {
   return connection.method === 'subscription'
-    ? 'ChatGPT plan'
+    ? connection.provider === 'anthropic'
+      ? 'Claude plan'
+      : 'ChatGPT plan'
     : connection.provider === 'openai' || connection.provider === 'anthropic'
       ? `${modelProviderNames[connection.provider]} API`
       : modelProviderNames[connection.provider];

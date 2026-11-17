@@ -42,6 +42,7 @@ import { audioUsage, nativeAudioRequest, readsNativeAudio } from './audio.ts';
 import { completeAssistantMessage } from './checkpoint.ts';
 import { modelContext } from './context.ts';
 import { modelServiceError } from '../model-error.ts';
+import { claudeCodeAccount, streamClaudeCode } from '../claude-code/index.ts';
 import {
   antLingModel,
   nativeAudioModel,
@@ -630,6 +631,13 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
       result.catch(() => {});
       return { url: url.toString(), state, result, complete };
     },
+    async connectClaudeCode() {
+      const credential = await claudeCodeAccount();
+      return {
+        credential,
+        models: assistantModels((await runtime()).getModels('anthropic')).map(definition),
+      };
+    },
     async connectKey(provider, credential) {
       try {
         return { credential, models: await this.catalog(provider, 'api_key', credential) };
@@ -721,6 +729,12 @@ export function createPiModelBackend(options: { fetch?: typeof fetch } = {}): Mo
         local = [...local, nativeAudioModel].map((model) => ({ ...model, baseUrl }));
       }
       if (!credential) return local.map(definition);
+      if (provider === 'anthropic' && method === 'subscription') {
+        if (credential.type !== 'claude_code')
+          throw new ModelAuthError('Reconnect Claude Code in Settings > Models.', true);
+        await claudeCodeAccount();
+        return local.map(definition);
+      }
       if (provider === 'amazon-bedrock') return bedrockCatalog(local, credential);
       if (provider === 'google-vertex') return vertexCatalog(local, credential);
       if (provider === 'azure') return azureCatalog(local, credential);
@@ -1027,12 +1041,19 @@ export async function createPiModelRuntime(
 ) {
   const subscription = access.method === 'subscription';
   const provider = access.provider;
+  const claudeCode = subscription && provider === 'anthropic';
   const reconnect = async (credential?: ModelCredential) => {
     await access.needsReconnect?.(credential);
-    return new ModelAuthError('Reconnect your ChatGPT account in Settings > Models.', true);
+    return new ModelAuthError(
+      claudeCode
+        ? 'Reconnect Claude Code in Settings > Models.'
+        : 'Reconnect your ChatGPT account in Settings > Models.',
+      true,
+    );
   };
   if (
     subscription &&
+    !claudeCode &&
     (provider !== 'openai' ||
       access.definition.spec.provider !== provider ||
       access.definition.spec.api !== 'openai-responses' ||
@@ -1045,6 +1066,10 @@ export async function createPiModelRuntime(
       if (providerId !== provider) return undefined;
       const credential = await access.read();
       if (!credential) throw new Error('The selected model connection is unavailable.');
+      if (claudeCode) {
+        if (credential.type !== 'claude_code') throw await reconnect(credential);
+        return { type: 'api_key', key: keyless };
+      }
       if (subscription) {
         const parsed = chatgptCredentialSchema.safeParse(credential);
         if (!parsed.success) throw await reconnect(credential);
@@ -1052,7 +1077,7 @@ export async function createPiModelRuntime(
         for (const secret of [value.access, value.refresh, value.idToken]) secrets.add(secret);
         return { type: 'oauth', access: value.access, refresh: '', expires: value.expires };
       }
-      if (credential.type === 'oauth')
+      if (credential.type === 'oauth' || credential.type === 'claude_code')
         throw new Error('The selected model connection is unavailable.');
       if (credential.key) secrets.add(credential.key);
       if (provider === 'anthropic' && credential.type === 'api_key')
@@ -1087,7 +1112,7 @@ export async function createPiModelRuntime(
       return { type: 'api_key', key: credential.key || keyless };
     },
     async list() {
-      return [{ providerId: provider, type: subscription ? 'oauth' : 'api_key' }];
+      return [{ providerId: provider, type: subscription && !claudeCode ? 'oauth' : 'api_key' }];
     },
     async modify() {
       throw new Error('Model credentials are managed by Nod.');
@@ -1135,7 +1160,7 @@ export async function createPiModelRuntime(
     : undefined;
   if (access.textModel && (!textModel || readsNativeAudio(textModel)))
     throw new Error('The text companion is unavailable. Refresh the model list.');
-  const stream = runtime.streamSimple.bind(runtime);
+  const stream = claudeCode ? streamClaudeCode : runtime.streamSimple.bind(runtime);
   const requestFacts = new WeakMap<AssistantMessage, ModelRequestFacts>();
   runtime.streamSimple = (model, context, options) => {
     context = {

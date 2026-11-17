@@ -13,6 +13,7 @@ export type ModelCredential =
   | { type: 'bedrock'; key: string; region: string }
   | { type: 'cloudflare'; key: string; accountId: string; gatewayId?: string }
   | { type: 'azure'; url: string; key: string; model: string; deployment: string }
+  | { type: 'claude_code'; email?: string; plan?: string }
   | {
       type: 'oauth';
       access: string;
@@ -64,6 +65,7 @@ export interface ModelBackend {
     provider: ModelProvider,
     credential: ModelCredential,
   ): Promise<{ credential: ModelCredential; models: ModelDefinition[] }>;
+  connectClaudeCode?(): Promise<{ credential: ModelCredential; models: ModelDefinition[] }>;
   signIn(input: { signal: AbortSignal; hostId: string; previous?: ModelCredential }): Promise<{
     url: string;
     state: string;

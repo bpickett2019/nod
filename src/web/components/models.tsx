@@ -190,7 +190,7 @@ function providerDescription(provider: ModelProvider) {
     case 'openai':
       return 'ChatGPT Plus or Pro plan, or an API key';
     case 'anthropic':
-      return 'API key only. Claude plans can’t be used here.';
+      return 'Claude plan through Claude Code, or an API key';
     case 'google':
       return 'Gemini with an AI Studio key · Argon requires paid access';
     case 'openrouter':
@@ -555,7 +555,7 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
   function startConnection(provider: ModelProvider, connectionId?: string) {
     resetForm();
     setUrl(provider === 'compatible' ? localServerAddress : '');
-    setKeyForm(provider !== 'openai' && provider !== 'openrouter');
+    setKeyForm(provider !== 'openai' && provider !== 'openrouter' && provider !== 'anthropic');
     setPanel({ type: 'connect', provider, connectionId });
   }
   const panelProvider = panel && 'provider' in panel ? panel.provider : null;
@@ -711,7 +711,7 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
                             {connection.managed
                               ? 'Server settings'
                               : connection.method === 'subscription'
-                                ? 'ChatGPT plan'
+                                ? modelSource(connection)
                                 : connection.method === 'oauth'
                                   ? 'Connected with sign-in'
                                   : connection.provider === 'compatible'
@@ -818,24 +818,41 @@ export function ModelSettings({ onDirtyChange }: { onDirtyChange?(dirty: boolean
           )}
           {panel?.type === 'connect' && !flow.signIn && (
             <>
-              {!keyForm && (panel.provider === 'openai' || panel.provider === 'openrouter') ? (
+              {!keyForm &&
+              (panel.provider === 'openai' ||
+                panel.provider === 'openrouter' ||
+                panel.provider === 'anthropic') ? (
                 <div className="model-connect-methods">
                   <p>{providerDescription(panel.provider)}</p>
                   <Button
                     type="button"
                     disabled={busy}
                     onClick={() =>
-                      void flow.connect(
-                        panel.provider as 'openai' | 'openrouter',
-                        panel.connectionId,
-                      )
+                      void (panel.provider === 'anthropic'
+                        ? models
+                            .change(
+                              '/api/models/claude-code',
+                              'POST',
+                              panel.connectionId ? { connectionId: panel.connectionId } : {},
+                            )
+                            .then((saved) => {
+                              if (!saved) return;
+                              resetForm();
+                              setPanel(null);
+                            })
+                        : flow.connect(
+                            panel.provider as 'openai' | 'openrouter',
+                            panel.connectionId,
+                          ))
                     }
                   >
                     {panel.connectionId
                       ? 'Reconnect'
                       : panel.provider === 'openai'
                         ? 'Sign in with ChatGPT'
-                        : 'Sign in with OpenRouter'}
+                        : panel.provider === 'anthropic'
+                          ? 'Use Claude Code sign-in'
+                          : 'Sign in with OpenRouter'}
                   </Button>
                   <Button
                     type="button"

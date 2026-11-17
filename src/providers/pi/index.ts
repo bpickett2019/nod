@@ -855,6 +855,8 @@ export function createPiAgent(options: {
             }),
           (pi: ExtensionAPI) =>
             pi.on('cache_warming_decision', async () => {
+              if (access?.method === 'subscription' && access.provider === 'anthropic')
+                return { action: 'stop' as const };
               try {
                 await access?.prepareRequest?.(connection?.textModel?.id ?? model.id, true);
               } catch {
