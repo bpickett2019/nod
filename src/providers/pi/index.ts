@@ -56,6 +56,7 @@ import { createPiUsageTracker, piUsageMetrics, usageId } from './usage.ts';
 import { agentModels } from '../../shared/model-defaults.ts';
 import type { ModelSelection } from '../../shared/models.ts';
 import { createSandbox, workspaceOutputs } from './sandbox.ts';
+import { continuityNotes } from './continuity.ts';
 import { untrustedBlock } from '../../shared/untrusted.ts';
 import { isPublicAddress, publicLookup } from '../agent-browser/network.ts';
 
@@ -320,6 +321,11 @@ function stableRequestCache(
 }
 
 const ownerContextType = 'nod-owner-context';
+const handoffType = 'nod-context-handoff';
+const handoffSummary =
+  'This summary is a handoff: the conversation reached the model’s context limit during the current request. State the owner’s current request, every action already completed with its result, every action started whose outcome is unknown, and the next step.';
+const handoffContinue =
+  'The conversation reached the model’s context limit, so it was handed off to the summary above. Continue the owner’s current request from there. Do not repeat completed actions, and check any action with an unknown outcome before doing it again.';
 
 function isOwnerContext(message: { role: string }) {
   return (
@@ -528,6 +534,7 @@ export function createPiAgent(options: {
       );
       let compacting = false;
       let recovering = false;
+      let overflowed = false;
       let toolCallCount = 1;
       const boundedOutput = async (
         name: string,
@@ -766,6 +773,8 @@ export function createPiAgent(options: {
                 ...selected,
                 maxTokens: Math.min(selected.maxTokens, Math.floor(selected.contextWindow / 4)),
               };
+              const continuity = continuityNotes(preparation, target.contextWindow);
+              preparation.previousSummary = continuity.previousSummary;
               compacting = true;
               try {
                 const result = await compact(
@@ -791,6 +800,7 @@ export function createPiAgent(options: {
                       'saved context',
                       await output.save([{ type: 'text', text: result.summary }], 1000, signal),
                     );
+                result.summary += continuity.notes;
                 return { compaction: result };
               } catch (error) {
                 if (signal.aborted) return { cancel: true };
@@ -844,7 +854,8 @@ export function createPiAgent(options: {
                       recoveryContext +
                       '\n' +
                       untrustedBlock('saved context', saved) +
-                      (owner ? '\nCurrent request:\n' + owner : ''),
+                      (owner ? '\nCurrent request:\n' + owner : '') +
+                      continuity.notes,
                     firstKeptEntryId: preparation.firstKeptEntryId,
                     tokensBefore: preparation.tokensBefore,
                   },
@@ -1170,6 +1181,7 @@ export function createPiAgent(options: {
                   ...piUsageMetrics(message?.usage),
                 },
               });
+          if (event.aborted || (compaction && error)) overflowed = false;
           compaction = undefined;
         }
         if (
@@ -1282,6 +1294,11 @@ export function createPiAgent(options: {
             status === 'incomplete' &&
             tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output >=
               model.contextWindow - budget.margin;
+          overflowed =
+            contextExhausted ||
+            (event.message.stopReason === 'error' &&
+              !tokenRateLimit.test(event.message.errorMessage ?? '') &&
+              isContextOverflow(event.message, model.contextWindow));
           input.onEvent({
             type: 'message_end',
             ...(status ? { status } : {}),
@@ -1323,11 +1340,26 @@ export function createPiAgent(options: {
               prior.length ? undefined : { deliverAs: 'nextTurn' },
             );
           try {
+            overflowed = false;
             if (audio && readsNativeAudio(model))
               await session.sendCustomMessage(audioMessage(text, images, audio), {
                 triggerTurn: true,
               });
             else await session.prompt(text, { images, expandPromptTemplates: false });
+            if (overflowed && !input.shouldStop()) {
+              overflowed = false;
+              settings.applyOverrides({ compaction: { keepRecentTokens: 0 } });
+              if (
+                await session.compact(handoffSummary).then(
+                  () => true,
+                  () => false,
+                )
+              )
+                await session.sendCustomMessage(
+                  { customType: handoffType, content: handoffContinue, display: false },
+                  { triggerTurn: true },
+                );
+            }
           } finally {
             recovering = false;
             settings.applyOverrides({ compaction: budget.compaction });

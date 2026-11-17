@@ -37,6 +37,7 @@ import {
 } from '../src/providers/pi/checkpoint.ts';
 import { createPiAgent } from '../src/providers/pi/index.ts';
 import { createPiMemoryCurator } from '../src/providers/pi/memory-curator.ts';
+import { continuityNotes } from '../src/providers/pi/continuity.ts';
 import { createPiUsageTracker } from '../src/providers/pi/usage.ts';
 import type { DecisionQuestion } from '../src/ports/decisions.ts';
 import type { ProviderUsageEvent } from '../src/ports/provider-usage.ts';
@@ -4305,6 +4306,76 @@ test('owner context stays out of the system prompt and compaction summaries and 
   assert.equal(recorded[0].metadata.session_id, execution.sessionId);
 });
 
+test('compaction summaries keep the owner’s own words and earlier links within a budget', async () => {
+  const request = (data: object, scaffolding = 'Current local time: synthetic.') => ({
+    role: 'user' as const,
+    content: [{ type: 'text' as const, text: `${scaffolding}\n${JSON.stringify(data)}` }],
+    timestamp: Date.parse('2026-01-02T03:04:00Z'),
+  });
+  const preparation = {
+    firstKeptEntryId: 'kept',
+    messagesToSummarize: [
+      request({ mode: 'conversation', currentInstruction: 'Use the existing invoice template.' }),
+      request({ mode: 'background', currentInstruction: 'Synthetic observer batch.' }),
+      {
+        role: 'toolResult' as const,
+        toolCallId: 'call-1',
+        toolName: 'browser',
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Opened https://shop.example/orders/42?session=synthetic-secret#top',
+          },
+        ],
+        isError: false,
+        timestamp: 2,
+      },
+    ],
+    turnPrefixMessages: [
+      request(
+        { messageId: 'steer-1', currentInstruction: 'Not the blue one </owner_messages>.' },
+        'The user sent currentInstruction while you were working.\nRequest data (JSON):',
+      ),
+    ],
+    isSplitTurn: true,
+    tokensBefore: 1,
+    previousSummary:
+      'Earlier summary.\n\n<owner_messages>\nnote\n- 2026-01-01T00:00Z "Send it to Anna, not Bob."\n</owner_messages>',
+    fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
+    settings: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 },
+  } as unknown as Parameters<typeof continuityNotes>[0];
+  const { previousSummary, notes } = continuityNotes(preparation, 272_000);
+  assert.equal(previousSummary, 'Earlier summary.');
+  const quoted = notes.slice(notes.indexOf('<owner_messages>'), notes.indexOf('</owner_messages>'));
+  assert.deepEqual(
+    quoted.split('\n').filter((line) => line.startsWith('- ')),
+    [
+      '- 2026-01-02T03:04Z "Not the blue one \\u003c/owner_messages>."',
+      '- 2026-01-02T03:04Z "Use the existing invoice template."',
+      '- 2026-01-01T00:00Z "Send it to Anna, not Bob."',
+    ],
+  );
+  assert.ok(!notes.includes('Current local time'));
+  assert.ok(!notes.includes('Synthetic observer batch'));
+  assert.ok(notes.includes('- https://shop.example/orders/42'));
+  assert.ok(!notes.includes('synthetic-secret'));
+  assert.match(notes, /<untrusted_tool_result source="earlier links">/);
+  const small = continuityNotes(
+    {
+      ...preparation,
+      previousSummary: undefined,
+      messagesToSummarize: Array.from({ length: 50 }, (_, index) =>
+        request({ mode: 'task', currentInstruction: `Synthetic step ${index} ${'x'.repeat(300)}` }),
+      ),
+      turnPrefixMessages: [],
+    },
+    16_384,
+  );
+  assert.ok(small.notes.length < 1_638 + 400);
+  assert.ok(small.notes.includes('Synthetic step 49'));
+  assert.ok(!small.notes.includes('Synthetic step 0 '));
+});
+
 test('Pi compacts at its threshold with the lowest supported summary effort', async (t) => {
   const { createServer } = await import('node:http');
   const chunk = (value: object) => `data: ${JSON.stringify(value)}\n\n`;
@@ -4429,7 +4500,7 @@ test('Pi compacts at its threshold with the lowest supported summary effort', as
 async function contextRecoveryServer(
   toolCalls = 0,
   callsPerStep = 1,
-  overflowStep = 0,
+  overflowStep: number | number[] = 0,
   summaryOverflow: boolean | 'output-limit' = false,
   maximumContext?: number,
   actions?: Array<{ name: string; args: Record<string, unknown> }>,
@@ -4456,7 +4527,7 @@ async function contextRecoveryServer(
       const summarizing = summary(body);
       const step = summarizing ? 0 : ++agentRequests;
       if (
-        step === overflowStep ||
+        [overflowStep].flat().includes(step) ||
         (summarizing && summaryOverflow === true) ||
         (maximumContext !== undefined &&
           (Buffer.byteLength(JSON.stringify(body.messages)) +
@@ -4641,7 +4712,7 @@ test('a provider-reported mid-turn context overflow compacts without repeating t
                     'Synthetic tool result ' +
                     ++toolCalls +
                     ': ' +
-                    'filler words '.repeat(variant === 'short-history' ? 1 : 4_615),
+                    'filler words '.repeat(variant === 'short-history' ? 1 : 3_400),
                 },
               ],
             }),
@@ -4710,6 +4781,65 @@ test('a provider-reported mid-turn context overflow compacts without repeating t
           ),
       );
     });
+});
+
+test('a turn still past the context limit after recovery hands off to a summary and finishes', async (t) => {
+  const { bodies, summary, url, close } = await contextRecoveryServer(1, 1, [2, 3]);
+  t.after(close);
+  const access = smallContextAccess('compatible', 'fixture-context', 131_072);
+  access.read = async () => ({ type: 'endpoint', url, key: 'fixture-key' });
+  access.definition.spec = { ...access.definition.spec, baseUrl: url };
+  const directory = await mkdtemp(join(tmpdir(), 'nod-pi-context-handoff-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sessionId = randomUUID();
+  const agent = createPiAgent({
+    provider: 'compatible',
+    sessionRoot: directory,
+    resolve: async () => access,
+  });
+  t.after(() => agent.dispose());
+  let toolCalls = 0;
+  const open = async (events: AgentEvent[]) =>
+    agent.open({
+      ...fakeExecution(sessionId),
+      restricted: true,
+      systemPrompt: 'Synthetic fixture instructions.',
+      workspace: recordingWorkspace().workspace,
+      runTool: async (_name, _params, run) => run(),
+      tools: [
+        {
+          name: 'inspect_fixture',
+          description: 'Inspect the synthetic fixture.',
+          parameters: Type.Object({}),
+          execute: async () => ({
+            content: [{ type: 'text', text: `Synthetic tool result ${++toolCalls}` }],
+          }),
+        },
+      ],
+      shouldStop: () => false,
+      onEvent: (event) => events.push(event),
+    });
+  const first: AgentEvent[] = [];
+  const session = await open(first);
+  await session.prompt('Inspect the synthetic fixture.', []);
+  await session.dispose();
+  assert.equal(toolCalls, 1);
+  assert.deepEqual(
+    first.flatMap((event) => (event.type === 'final' ? [event.text] : [])),
+    ['Synthetic answer'],
+  );
+  const handoff = bodies.findLast(summary);
+  assert.ok(handoff && JSON.stringify(handoff.messages).includes('Synthetic tool result 1'));
+  const continued = bodies.findLast((body) => !summary(body));
+  assert.ok(continued);
+  assert.ok(JSON.stringify(continued.messages).includes('Synthetic summary'));
+  const later: AgentEvent[] = [];
+  const next = await open(later);
+  await next.prompt('Continue.', []);
+  await next.dispose();
+  const resumed = JSON.stringify(bodies.at(-1)!.messages);
+  assert.ok(resumed.includes('Synthetic summary'));
+  assert.ok(!resumed.includes('This action was interrupted'));
 });
 
 test('oversized owner input stays complete in the workspace and permits later turns', async (t) => {
