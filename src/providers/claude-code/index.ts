@@ -39,6 +39,7 @@ const inheritedEnvironment = [
   'TMPDIR',
   'LANG',
   'LC_ALL',
+  'CLAUDE_CONFIG_DIR',
 ];
 
 const transcriptFormat = `<nod_transcript_format>

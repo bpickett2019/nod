@@ -23,6 +23,7 @@ services:
       WORKSPACE_CONTAINER: nod-workspace-${COMPOSE_PROJECT_NAME:-nod-server}
       BROWSER_CONTAINER: nod-browser-${COMPOSE_PROJECT_NAME:-nod-server}
       NOD_ORG_SKILLS: ${NOD_ORG_SKILLS:+/org-skills}
+      CLAUDE_CONFIG_DIR: /var/lib/nod/claude-code
     ports:
       - '${NOD_BIND_ADDRESS:-127.0.0.1}:${PORT:-4310}:${PORT:-4310}'
     volumes:

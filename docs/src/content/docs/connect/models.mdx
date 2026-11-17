@@ -112,14 +112,14 @@ If the connection fails because workspace discovery isn't available, **Enter wor
 
 <Steps>
 
-1. On the computer that runs Nod, install [Claude Code](https://code.claude.com/docs/en/setup) and run `claude auth login` with your Claude account.
+1. On the computer that runs Nod, install [Claude Code](https://code.claude.com/docs/en/setup) and run `claude auth login` with your Claude account. On a [Docker server](/deploy/self-host/), Claude Code is already installed: run `docker compose --file compose.yaml --env-file .env exec server claude auth login` in the installation folder. The sign-in is kept with the server's data, so it survives restarts and upgrades.
 2. In Nod, choose **Anthropic**, then **Use Claude Code sign-in**.
 
 </Steps>
 
 Nod checks `claude auth status` and needs a sign-in with a Claude plan, not an API key. For each model request, Nod runs `claude -p` with Claude Code's own tools turned off and Nod's tools listed for the model. When the model calls a tool, Nod stops Claude Code and runs that tool itself, so the trust check, approvals and Vault work as with any other connection. Requests use your plan's usage limits. Usage shows each request at its API-price estimate, and the [task check-in](/use/spending/#task-check-ins) counts that estimate.
 
-Nod starts Claude Code with only basic environment variables, so an `ANTHROPIC_API_KEY` in your shell or `.env` isn't used. New Claude models need a recent Claude Code; if a request says your version is too old, run `claude update`. If `claude` is installed in more than one place, update the one found first on the `PATH` of the program that starts Nod. The conversation reaches the model as one transcript per request, and Claude Code adds your account email and today's date to it. Nod doesn't keep the prompt cache warm between turns on this connection.
+Nod starts Claude Code with only basic environment variables and `CLAUDE_CONFIG_DIR`, so an `ANTHROPIC_API_KEY` in your shell or `.env` isn't used. New Claude models need a recent Claude Code; if a request says your version is too old, run `claude update`, or on a Docker server install a newer Nod server release. If `claude` is installed in more than one place, update the one found first on the `PATH` of the program that starts Nod. The conversation reaches the model as one transcript per request, and Claude Code adds your account email and today's date to it. Nod doesn't keep the prompt cache warm between turns on this connection.
 
 </TabItem>
 <TabItem label="OpenRouter">

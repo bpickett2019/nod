@@ -13,6 +13,7 @@ RUN pnpm exec vite build && pnpm prune --prod && pnpm store prune
 FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code@2.1.326 && npm cache clean --force
 WORKDIR /app
 COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build --chown=node:node /app/package.json ./
