@@ -17,7 +17,7 @@ export function modelContext<
   const margin = Math.min(2048, Math.max(128, Math.floor(window / 16)));
   const trigger = compact
     ? Math.ceil(window / 2)
-    : Math.min(256_000, window - 16_384, Math.floor((window - maxTokens - margin) * 0.75));
+    : Math.min(160_000, window - 16_384, Math.floor((window - maxTokens - margin) * 0.75));
   return {
     model: { ...model, contextWindow: window, maxTokens },
     compact,
