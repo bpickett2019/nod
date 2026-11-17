@@ -1306,11 +1306,36 @@ function failAtLimit(turnId: string, monthlyUsd?: number) {
   );
 }
 
+const restartResume =
+  'Nod restarted while you were working on this request, and every action you started had finished. Continue the request from where it stopped. Check the current state before repeating anything.';
+
+async function resumeInterrupted(turnId: string) {
+  return transaction(async (client) => {
+    await lockThread(client);
+    const turn = (
+      await client.query(
+        `SELECT u.id FROM turns u WHERE u.id=$1 AND u.owner_id=$2 AND u.status='running'
+         AND ${ownerStarted()} AND u.started_at > now() - interval '6 hours'
+         AND NOT (u.source='resume' AND u.source_id LIKE 'restart:%')
+         AND NOT EXISTS (SELECT 1 FROM turn_events e WHERE e.turn_id=u.id AND e.type='tool_start'
+           AND NOT EXISTS (SELECT 1 FROM turn_events c WHERE c.turn_id=e.turn_id AND c.call_id=e.call_id
+             AND c.type IN ('tool_complete','tool_failed')))
+         FOR UPDATE`,
+        [turnId, ownerId],
+      )
+    ).rows[0];
+    if (!turn) return false;
+    await finishTurn(client, turnId, 'failed', { error: interrupted });
+    return resumeTurn(turnId, `restart:${turnId}`, restartResume, false, client);
+  }, pool);
+}
+
 export async function startThreadWorkers(dependencies: ThreadDependencies) {
   const stranded = await pool.query("SELECT id FROM turns WHERE owner_id=$1 AND status='running'", [
     ownerId,
   ]);
-  for (const turn of stranded.rows) await failTurn(turn.id, dependencies.present);
+  for (const turn of stranded.rows)
+    if (!(await resumeInterrupted(turn.id))) await failTurn(turn.id, dependencies.present);
   await sendDrain(undefined, (await activeThread()).id);
   const start = async () =>
     (drainWorker = await boss.work<{ threadId: string }>(

@@ -2019,7 +2019,7 @@ test(
       );
 
       await t.test(
-        'worker start interrupts running turns once without retrying them and drains queued turns',
+        'worker start resumes owner turns whose tools all finished and interrupts the rest once',
         async (t) => {
           const missingJob = await thread.enqueueTurn('recovery-fixture', {
             source: 'schedule',
@@ -2056,6 +2056,18 @@ test(
             [savedTask, ownerId, taskTurn, anchor],
           );
           await db.pool.query('UPDATE turns SET task_id=$1 WHERE id=$2', [savedTask, taskTurn]);
+          await db.pool.query(
+            "INSERT INTO turn_events(id,turn_id,type,summary,call_id) VALUES($1,$3,'tool_start','browser click',$4),($2,$5,'tool_start','browser snapshot',$6),($7,$5,'tool_complete','browser snapshot',$6)",
+            [
+              randomUUID(),
+              randomUUID(),
+              taskTurn,
+              'unfinished-call',
+              foreground,
+              'finished-call',
+              randomUUID(),
+            ],
+          );
           await thread.startThreadWorkers(dependencies);
           await waitFor(async () => (await turnStatus(missingJob)) === 'succeeded');
           assert.deepEqual(ran(missingJob)?.connectedApps, []);
@@ -2080,9 +2092,7 @@ test(
                 [id],
               )
             ).rows;
-          assert.deepEqual(await interruptedReplies(foreground), [
-            { text: interruptedText, thread_id: threadId },
-          ]);
+          assert.deepEqual(await interruptedReplies(foreground), []);
           assert.deepEqual(await interruptedReplies(background), [
             { text: interruptedText, thread_id: threadId },
           ]);
@@ -2098,15 +2108,21 @@ test(
             ).rows[0].reply_to_message_id,
             anchor,
           );
-          assert.equal(
-            (
-              await db.pool.query(
-                "SELECT id FROM turns WHERE thread_id=$1 AND source='resume' AND created_at > (SELECT created_at FROM turns WHERE id=$2)",
-                [threadId, foreground],
-              )
-            ).rowCount,
-            0,
-          );
+          const resumed = (
+            await db.pool.query(
+              "SELECT parent_turn_id,source_id,session_id FROM turns WHERE thread_id=$1 AND source='resume' AND created_at > (SELECT created_at FROM turns WHERE id=$2)",
+              [threadId, foreground],
+            )
+          ).rows;
+          assert.deepEqual(resumed, [
+            {
+              parent_turn_id: foreground,
+              source_id: `restart:${foreground}`,
+              session_id: (
+                await db.pool.query('SELECT session_id FROM turns WHERE id=$1', [foreground])
+              ).rows[0].session_id,
+            },
+          ]);
         },
       );
 

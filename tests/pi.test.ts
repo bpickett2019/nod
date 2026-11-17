@@ -4842,6 +4842,68 @@ test('a turn still past the context limit after recovery hands off to a summary 
   assert.ok(!resumed.includes('This action was interrupted'));
 });
 
+test('a reply cut off at the output limit is written again instead of asking the owner to continue', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'nod-pi-cut-off-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const access = smallContextAccess('compatible', 'fixture-context', 131_072);
+  const requests: string[] = [];
+  const events: AgentEvent[] = [];
+  const agent = createPiAgent({
+    provider: 'compatible',
+    sessionRoot: directory,
+    resolve: async () => access,
+    createSession: async (options) => {
+      const result = await createAgentSession(options);
+      result.session.agent.streamFunction = (model, context) => {
+        requests.push(JSON.stringify(context.messages));
+        const cut = requests.length === 1;
+        const message = {
+          ...fauxAssistantMessage(cut ? 'Synthetic partial' : 'Synthetic complete reply'),
+          model: model.id,
+          provider: model.provider,
+          api: model.api,
+          stopReason: cut ? ('length' as const) : ('stop' as const),
+          usage: {
+            input: 1000,
+            output: cut ? 4096 : 10,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: cut ? 5096 : 1010,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        };
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: 'done', reason: cut ? 'length' : 'stop', message });
+        return stream;
+      };
+      return result;
+    },
+  });
+  t.after(() => agent.dispose());
+  const session = await agent.open({
+    ...fakeExecution(randomUUID()),
+    restricted: true,
+    systemPrompt: 'Synthetic instructions.',
+    workspace: recordingWorkspace().workspace,
+    runTool: async (_name, _params, run) => run(),
+    tools: [],
+    shouldStop: () => false,
+    onEvent: (event) => events.push(event),
+  });
+  await session.prompt('Write the synthetic report.', []);
+  await session.dispose();
+  assert.equal(requests.length, 2);
+  assert.match(requests[1]!, /reached the output limit and was cut off/);
+  assert.deepEqual(
+    events.flatMap((event) => (event.type === 'final' ? [event.text] : [])),
+    ['Synthetic complete reply'],
+  );
+  assert.deepEqual(
+    events.flatMap((event) => (event.type === 'message_end' ? [event.status] : [])),
+    ['incomplete', 'succeeded'],
+  );
+});
+
 test('oversized owner input stays complete in the workspace and permits later turns', async (t) => {
   const window = 16_384;
   const { bodies, url, close } = await contextRecoveryServer(0, 1, -1, false, window);
@@ -6275,7 +6337,12 @@ test('full 32k Pi sessions distinguish context exhaustion from output truncation
   const outputLimit = await turn('fixture-output-limit', 'List the synthetic calendars.');
   assert.ok(outputLimit.outcome.failure);
   assert.deepEqual(outputLimit.ending, { type: 'message_end', status: 'incomplete' });
-  assert.equal(bodies.length, 1);
+  assert.equal(bodies.length, 4);
+  assert.ok(
+    bodies
+      .slice(1)
+      .every((body) => JSON.stringify(body.messages).includes('reached the output limit')),
+  );
   assert.equal(bodies[0].max_tokens, 8192);
   assert.equal(outputLimit.usage[0].outputTokens, bodies[0].max_tokens);
   assert.ok(outputLimit.usage[0].totalTokens < 32_768);

@@ -326,6 +326,8 @@ const handoffSummary =
   'This summary is a handoff: the conversation reached the model’s context limit during the current request. State the owner’s current request, every action already completed with its result, every action started whose outcome is unknown, and the next step.';
 const handoffContinue =
   'The conversation reached the model’s context limit, so it was handed off to the summary above. Continue the owner’s current request from there. Do not repeat completed actions, and check any action with an unknown outcome before doing it again.';
+const cutOffRetry =
+  'Your last reply reached the output limit and was cut off, so the owner did not receive it. Write the complete reply again, shorter. Put long content in a workspace file and deliver the file instead of writing it in the reply.';
 
 function isOwnerContext(message: { role: string }) {
   return (
@@ -535,6 +537,7 @@ export function createPiAgent(options: {
       let compacting = false;
       let recovering = false;
       let overflowed = false;
+      let truncated = false;
       let toolCallCount = 1;
       const boundedOutput = async (
         name: string,
@@ -1299,6 +1302,7 @@ export function createPiAgent(options: {
             (event.message.stopReason === 'error' &&
               !tokenRateLimit.test(event.message.errorMessage ?? '') &&
               isContextOverflow(event.message, model.contextWindow));
+          truncated = status === 'incomplete' && !contextExhausted;
           input.onEvent({
             type: 'message_end',
             ...(status ? { status } : {}),
@@ -1341,24 +1345,38 @@ export function createPiAgent(options: {
             );
           try {
             overflowed = false;
+            truncated = false;
             if (audio && readsNativeAudio(model))
               await session.sendCustomMessage(audioMessage(text, images, audio), {
                 triggerTurn: true,
               });
             else await session.prompt(text, { images, expandPromptTemplates: false });
-            if (overflowed && !input.shouldStop()) {
+            for (
+              let recoveries = 0;
+              (overflowed || truncated) && recoveries < 3 && !input.shouldStop();
+              recoveries++
+            ) {
+              const handoff = overflowed;
               overflowed = false;
-              settings.applyOverrides({ compaction: { keepRecentTokens: 0 } });
-              if (
-                await session.compact(handoffSummary).then(
-                  () => true,
-                  () => false,
+              truncated = false;
+              if (handoff) {
+                settings.applyOverrides({ compaction: { keepRecentTokens: 0 } });
+                if (
+                  !(await session.compact(handoffSummary).then(
+                    () => true,
+                    () => false,
+                  ))
                 )
-              )
-                await session.sendCustomMessage(
-                  { customType: handoffType, content: handoffContinue, display: false },
-                  { triggerTurn: true },
-                );
+                  break;
+              }
+              await session.sendCustomMessage(
+                {
+                  customType: handoffType,
+                  content: handoff ? handoffContinue : cutOffRetry,
+                  display: false,
+                },
+                { triggerTurn: true },
+              );
             }
           } finally {
             recovering = false;
