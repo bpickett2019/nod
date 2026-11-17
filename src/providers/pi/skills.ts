@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, resolve, sep } from 'node:path';
 import { loadSkills } from '@earendil-works/pi-coding-agent';
 import type { SkillLibrary } from '../../ports/agent.ts';
@@ -11,12 +11,15 @@ function checkedPath(base: string, file: string) {
   return path;
 }
 
-function loadDirectory(directory: string, excluded: readonly string[]) {
+function loadDirectory(directory: string, excluded: readonly string[], guidesOnly = false) {
   const root = realpathSync(directory);
   const skillPaths = readdirSync(root, { withFileTypes: true })
     .filter(
       (entry) =>
-        entry.isDirectory() && !entry.name.startsWith('.') && !excluded.includes(entry.name),
+        entry.isDirectory() &&
+        !entry.name.startsWith('.') &&
+        !excluded.includes(entry.name) &&
+        (!guidesOnly || existsSync(resolve(root, entry.name, 'SKILL.md'))),
     )
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((entry) => checkedPath(resolve(root, entry.name), 'SKILL.md'));
@@ -45,7 +48,7 @@ export function createSkillLibrary(
   const root = realpathSync(directory);
   const enabled = [
     ...loadDirectory(root, excluded),
-    ...(organization ? loadDirectory(organization, []) : []),
+    ...(organization ? loadDirectory(organization, [], true) : []),
   ];
   const names = enabled.map((skill) => skill.name);
   if (new Set(names).size !== names.length || names.some((name) => excluded.includes(name)))

@@ -1304,6 +1304,8 @@ test('organization guides join the built-in library without escaping their folde
     'Synthetic agency rules',
   );
   await writeFile(join(directory, 'secret.md'), 'Outside the organization folder');
+  await mkdir(join(organization, 'notes'));
+  await writeFile(join(organization, 'notes', 'meeting.md'), 'Not a guide');
   const library = createSkillLibrary(builtIn, ['artifacts'], organization);
   assert.deepEqual(
     library.catalog.map((skill) => skill.name),
