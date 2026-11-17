@@ -624,6 +624,7 @@ async function transportFixture() {
   let before = async (_action: string, _command: Record<string, unknown>) => {};
   let after = async (_action: string, _command: Record<string, unknown>, _socket: Socket) => {};
   let failedAction: string | undefined;
+  let snapshotData: ((command: Record<string, unknown>) => Record<string, unknown>) | undefined;
   let failedMessage = 'Navigation failed: net::ERR_HTTP_RESPONSE_CODE_FAILURE PRIVATE-UPSTREAM';
   const server = createServer((socket) => {
     sockets.add(socket);
@@ -650,7 +651,8 @@ async function transportFixture() {
       let data: Record<string, unknown> = {};
       if (command.action === 'url') data = { url: page.location.href };
       if (command.action === 'evaluate') data = { result: await page.evaluate(command.script) };
-      if (command.action === 'snapshot') data = { snapshot: page.text() };
+      if (command.action === 'snapshot')
+        data = snapshotData?.(command) ?? { snapshot: page.text() };
       if (command.action === 'navigate') page.location.href = command.url;
       if (command.action === 'screenshot') await writeFile(command.path, page.screen());
       await after(command.action, command, socket);
@@ -701,6 +703,9 @@ async function transportFixture() {
     after(value: typeof after) {
       after = value;
     },
+    snapshot(value: typeof snapshotData) {
+      snapshotData = value;
+    },
     async cleanup() {
       before = async () => {};
       after = async () => {};
@@ -711,6 +716,78 @@ async function transportFixture() {
     },
   };
 }
+
+test('after an action the model gets only the page change, and refs follow the change', async () => {
+  const browser = await transportFixture();
+  const requests: Array<{ delta?: unknown; full?: unknown }> = [];
+  let lines = [
+    '- heading "Order form" [ref=e1]',
+    '- textbox "Name" [ref=e2]',
+    '- button "Save" [ref=e3]',
+  ];
+  let revision = 0;
+  const next: Array<(base: number) => Record<string, unknown>> = [];
+  browser.snapshot((command) => {
+    requests.push({ delta: command.delta, full: command.full });
+    const scripted = command.full ? undefined : next.shift();
+    if (scripted) return { snapshot: scripted(revision++) };
+    return {
+      snapshot: {
+        kind: 'full',
+        revision: ++revision,
+        tree: lines.join('\n'),
+        refs: {
+          e1: { role: 'heading', name: 'Order form' },
+          e2: { role: 'textbox', name: 'Name' },
+          e3: { role: 'button', name: 'Save' },
+        },
+      },
+    };
+  });
+  try {
+    const opened = await browser.computer.act('fixture', {
+      action: 'open',
+      url: 'https://1.1.1.1/login',
+    });
+    assert.match(opened.text, /heading "Order form"[\s\S]*button "Save"/);
+    next.push((base) => ({
+      kind: 'delta',
+      baseRevision: base,
+      revision: base + 1,
+      treeChange: { startLine: 1, deleteCount: 1, lines: ['- textbox "Name" [ref=e2]: Ann'] },
+      changes: [{ op: 'add', ref: '@e4', node: { role: 'button', name: 'Confirm order' } }],
+    }));
+    const filled = await browser.computer.act('fixture', {
+      action: 'fill',
+      selector: '@e2',
+      text: 'Ann',
+    });
+    assert.match(filled.text, /^The page changed at line 2\./);
+    assert.match(
+      filled.text,
+      /Removed:\n- textbox "Name" \[ref=e2\]\nNow:\n- textbox "Name" \[ref=e2\]: Ann/,
+    );
+    assert.doesNotMatch(filled.text, /Order form|Save/);
+    const target = await browser.computer.currentPage('fixture', {
+      action: 'click',
+      selector: '@e4',
+    });
+    assert.deepEqual(target.controls, [{ role: 'button', name: 'Confirm order' }]);
+    next.push((base) => ({ kind: 'unchanged', baseRevision: base, revision: base + 1 }));
+    const hovered = await browser.computer.act('fixture', { action: 'hover', selector: '@e3' });
+    assert.equal(hovered.text, 'The page did not change.');
+    next.push((base) => ({ kind: 'unchanged', baseRevision: base + 7, revision: base + 8 }));
+    lines = [...lines, '- StaticText "Saved"'];
+    const stale = await browser.computer.act('fixture', { action: 'hover', selector: '@e3' });
+    assert.match(stale.text, /StaticText "Saved"/);
+    const explicit = await browser.computer.act('fixture', { action: 'snapshot' });
+    assert.match(explicit.text, /^Page \(0-\d+ of \d+ characters\):/);
+    assert.deepEqual(requests.at(-1), { delta: true, full: true });
+    assert.ok(requests.every((request) => request.delta === true));
+  } finally {
+    await browser.cleanup();
+  }
+});
 
 test('browser files larger than one protocol message stream through the bridge both ways', async () => {
   const file = Buffer.alloc(13 * 1024 * 1024 + 7);

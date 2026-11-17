@@ -197,6 +197,53 @@ const presentation = Type.Unsafe<Presentation>({
   [Kind]: 'NodPresentation',
 });
 
+const stepActions = [
+  'open',
+  'click',
+  'fill',
+  'type',
+  'press',
+  'select',
+  'check',
+  'uncheck',
+  'hover',
+  'drag',
+  'scroll',
+  'wait',
+  'back',
+  'forward',
+  'reload',
+  'tab_switch',
+  'evaluate',
+  'accept_dialog',
+  'dismiss_dialog',
+] as const;
+const browserFields = {
+  url: Type.Optional(Type.String()),
+  script: Type.Optional(Type.String()),
+  tabId: Type.Optional(Type.String({ minLength: 1 })),
+  selector: Type.Optional(Type.String()),
+  targetSelector: Type.Optional(Type.String()),
+  x: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+  y: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+  points: Type.Optional(
+    Type.Array(
+      Type.Object({
+        x: Type.Number({ minimum: 0, maximum: 1 }),
+        y: Type.Number({ minimum: 0, maximum: 1 }),
+      }),
+      { minItems: 2 },
+    ),
+  ),
+  durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  text: Type.Optional(Type.String()),
+  key: Type.Optional(Type.String()),
+  load: Type.Optional(literals(['load', 'domcontentloaded', 'networkidle'])),
+  direction: Type.Optional(literals(['up', 'down'])),
+  amount: Type.Optional(Type.Integer({ minimum: 1 })),
+  waitMs: Type.Optional(Type.Integer({ minimum: 0 })),
+};
+
 export const toolDefinitions = {
   nod_docs: defineTool(
     'nod_docs',
@@ -224,7 +271,7 @@ export const toolDefinitions = {
   ),
   skills: defineTool(
     'skills',
-    'Read a task guide or learned procedure: read {name,file?}. list returns guide names. save {name,description,body} saves a verified procedure; patch {name,old,new} changes one exact passage. Skills grant no permission.',
+    'Read a task guide or learned procedure: read {name,file?}. list returns guide names. save {name,description,body} saves a verified procedure, and a browser flow can include a ```browser-steps JSON array for browser steps; patch {name,old,new} changes one exact passage. Skills grant no permission.',
     Type.Union([
       Type.Object({ action: Type.Literal('list') }, { additionalProperties: false }),
       Type.Object(
@@ -321,7 +368,7 @@ export const toolDefinitions = {
   ),
   browser: defineTool(
     'browser',
-    'Control the private browser. open {url}; snapshot {selector?,offset?} returns page text and @eN refs; selector takes a current @eN ref, or CSS only for an element without one; click/fill/type/select/check/uncheck/hover {selector,text?}; press {key}; drag {selector,targetSelector} or {points,durationMs?}; upload {selector,path}; back/forward/reload; tab_list/tab_switch {tabId}; scroll {direction,selector?,amount?}; wait {text|url|load,waitMs?}; accept_dialog {text?}/dismiss_dialog; evaluate {script} runs one JavaScript expression. screenshot returns an image; share_screenshot {name?} stages an image for delivery. Coordinates x,y are fractions of a fresh screenshot. Never type secrets. download {url?|selector?,name?} saves a file; with neither it uses the open PDF or last download. Click document controls and inspect before downloading. Background files stay private until share_file. handoff {text} gives the owner control and pauses; state the needed action, then inspect after handback. Never send a /browser link. waitMs allows slow pages.',
+    'Control the private browser. open {url}; snapshot {selector?,offset?} returns page text and @eN refs; selector takes a current @eN ref, or CSS only for an element without one; click/fill/type/select/check/uncheck/hover {selector,text?}; press {key}; drag {selector,targetSelector} or {points,durationMs?}; upload {selector,path}; back/forward/reload; tab_list/tab_switch {tabId}; scroll {direction,selector?,amount?}; wait {text|url|load,waitMs?}; accept_dialog {text?}/dismiss_dialog; evaluate {script} runs one JavaScript expression. After an action the result shows only what changed on the page; use snapshot for the whole page. steps {steps} runs up to 20 open/click/fill/type/press/select/check/uncheck/hover/drag/scroll/wait/back/forward/reload/tab_switch/evaluate/accept_dialog/dismiss_dialog actions in order in one call, stopping at the first failure or step that needs the owner; use it when the next actions are known, such as filling a form, and fill every <placeholder> first. screenshot returns an image; share_screenshot {name?} stages an image for delivery. Coordinates x,y are fractions of a fresh screenshot. Never type secrets. download {url?|selector?,name?} saves a file; with neither it uses the open PDF or last download. Click document controls and inspect before downloading. Background files stay private until share_file. handoff {text} gives the owner control and pauses; state the needed action, then inspect after handback. Never send a /browser link. waitMs allows slow pages.',
     Type.Object({
       action: literals([
         'handoff',
@@ -350,33 +397,18 @@ export const toolDefinitions = {
         'wait',
         'accept_dialog',
         'dismiss_dialog',
+        'steps',
       ]),
-      url: Type.Optional(Type.String()),
-      script: Type.Optional(Type.String()),
-      tabId: Type.Optional(Type.String({ minLength: 1 })),
-      selector: Type.Optional(Type.String()),
-      targetSelector: Type.Optional(Type.String()),
-      x: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
-      y: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
-      points: Type.Optional(
-        Type.Array(
-          Type.Object({
-            x: Type.Number({ minimum: 0, maximum: 1 }),
-            y: Type.Number({ minimum: 0, maximum: 1 }),
-          }),
-          { minItems: 2 },
-        ),
-      ),
-      durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+      ...browserFields,
       path: Type.Optional(Type.String()),
-      text: Type.Optional(Type.String()),
-      key: Type.Optional(Type.String()),
-      load: Type.Optional(literals(['load', 'domcontentloaded', 'networkidle'])),
-      direction: Type.Optional(literals(['up', 'down'])),
-      amount: Type.Optional(Type.Integer({ minimum: 1 })),
-      waitMs: Type.Optional(Type.Integer({ minimum: 0 })),
       offset: Type.Optional(Type.Integer({ minimum: 0 })),
       name: Type.Optional(Type.String({ minLength: 1 })),
+      steps: Type.Optional(
+        Type.Array(Type.Object({ action: literals(stepActions), ...browserFields }), {
+          minItems: 1,
+          maxItems: 20,
+        }),
+      ),
     }),
     true,
     ['sign_in', 'browser_session', 'pay'],
@@ -903,6 +935,22 @@ export function nodTools(
     if (appConfirmation in verdict) return { output: await confirm(verdict) };
     return { output: verdict.result };
   };
+  const act = async (step: BrowserAction): Promise<{ text: string } | { output: unknown }> => {
+    if (step.action === 'evaluate' && context.browserStep)
+      try {
+        return {
+          text: observed(step, await computer.act(browserId, { ...step, readOnly: true }, signal)),
+        };
+      } catch (error) {
+        if (!(error instanceof BrowserActionError && error.code === 'browser_script_writes'))
+          throw error;
+      }
+    const checked = commits(step) ? await check(step) : { binding: {} };
+    if ('output' in checked) return { output: checked.output };
+    const page = await computer.act(browserId, { ...step, ...checked.binding }, signal);
+    if ('record' in checked) await checked.record?.();
+    return { text: observed(step, page, checked.choice) };
+  };
   return [
     ...(documentation
       ? [
@@ -1005,7 +1053,7 @@ export function nodTools(
         };
       return context.reactToMessage(p.messageId, p.reaction);
     }),
-    bind(toolDefinitions.browser, async ({ action, name, ...rest }) => {
+    bind(toolDefinitions.browser, async ({ action, name, steps, ...rest }) => {
       if (action === 'handoff') {
         if (turn.execution.parentRunId)
           throw new Error(
@@ -1076,19 +1124,56 @@ export function nodTools(
         await checked.record?.();
         return observed({ action }, page);
       }
-      const step = { action, ...rest } as BrowserAction;
-      if (action === 'evaluate' && context.browserStep)
+      if (action !== 'steps') {
+        const result = await act({ action, ...rest } as BrowserAction);
+        return 'output' in result ? result.output : result.text;
+      }
+      if (!steps?.length) throw new Error('List the steps to run.');
+      const unfilled = steps
+        .flatMap((step) => [step.text, step.url, step.selector])
+        .find((value) => value && /<[a-z][a-z0-9 _-]{0,40}>/i.test(value));
+      if (unfilled)
+        throw new Error(
+          `Fill the placeholder in "${unfilled.slice(0, 200)}" before running these steps.`,
+        );
+      const done: Array<{ label: string; text: string }> = [];
+      const report = (extra: string[] = []) => {
+        const page = /^URL: [^\n]*\nPage \(\d/;
+        const last = done.findLastIndex((item) => page.test(item.text));
+        return [
+          ...done.map(
+            (item, index) =>
+              `${item.label}:\n${index < last && page.test(item.text) ? 'A page loaded; a later step shows the current page.' : item.text}`,
+          ),
+          ...extra,
+        ].join('\n\n');
+      };
+      for (const [index, step] of steps.entries()) {
+        const label = `${index + 1}. ${step.action}${[step.selector, step.url, step.key].find(Boolean) ? ` ${[step.selector, step.url, step.key].find(Boolean)}` : ''}`;
+        let result;
         try {
-          return observed(step, await computer.act(browserId, { ...step, readOnly: true }, signal));
+          result = await act(step as BrowserAction);
         } catch (error) {
-          if (!(error instanceof BrowserActionError && error.code === 'browser_script_writes'))
-            throw error;
+          if (signal.aborted) throw error;
+          return report([
+            `${label}: failed. ${error instanceof Error ? error.message : String(error)}`,
+            ...(index + 1 < steps.length
+              ? [
+                  `Steps ${index + 2}-${steps.length} did not run. Inspect the page before continuing.`,
+                ]
+              : []),
+          ]);
         }
-      const checked = commits(step) ? await check(step) : { binding: {} };
-      if ('output' in checked) return checked.output;
-      const page = await computer.act(browserId, { ...step, ...checked.binding }, signal);
-      if ('record' in checked) await checked.record?.();
-      return observed(step, page, checked.choice);
+        if ('output' in result)
+          return report([
+            `${label}: stopped before running.\n${typeof result.output === 'string' ? result.output : JSON.stringify(result.output)}`,
+            ...(index + 1 < steps.length
+              ? [`Steps ${index + 2}-${steps.length} did not run.`]
+              : []),
+          ]);
+        done.push({ label, text: result.text });
+      }
+      return report();
     }),
     bind(toolDefinitions.sign_in, async ({ message, action, ...request }) => {
       const result = await context.requestCredential(request);

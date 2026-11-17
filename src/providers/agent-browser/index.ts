@@ -69,6 +69,7 @@ interface BrowserState {
   socket?: string;
   recovered?: boolean;
   saved: StoredScreen;
+  tree?: { lines: string[]; revision: number };
   browserExecutable?: string;
 }
 export interface BrowserDiagnostic {
@@ -92,6 +93,10 @@ const streamFrame = z.object({
 
 const holdMs = 30 * 60_000;
 const snapshotChars = 40_000;
+const changeChars = 6_000;
+const snapshotRefs = z
+  .record(z.string(), z.looseObject({ role: z.unknown().optional(), name: z.unknown().optional() }))
+  .catch({});
 
 const withoutPasskeys = `(() => {
   const container = window.CredentialsContainer && CredentialsContainer.prototype;
@@ -798,13 +803,13 @@ export function createAgentBrowserComputer(options: {
     const offset = input?.action === 'snapshot' ? (input.offset ?? 0) : 0;
     if (!Number.isInteger(offset) || offset < 0)
       throw new Error('Choose a non-negative page offset.');
-    const snapshot = async () => {
+    const snapshot = async (request: Record<string, unknown>) => {
       const devtools = state.secrets.size ? await inspector(state) : undefined;
       try {
         await devtools?.mask(true, [], false, true);
         return await observationCommand(
           state,
-          { action: 'snapshot', urls: true, ...(scope ? { selector: scope } : {}) },
+          { action: 'snapshot', urls: true, ...request },
           { signal },
         );
       } finally {
@@ -812,34 +817,97 @@ export function createAgentBrowserComputer(options: {
         devtools?.close();
       }
     };
-    const data = await snapshot();
-    if (await privateDocumentOpen(state, signal)) throw new BrowserLockedError();
-    const incoming =
-      data.refs && typeof data.refs === 'object' ? (data.refs as Record<string, unknown>) : {};
-    if (!scope) {
-      state.refs.clear();
-      for (const ref of state.refVersions.keys())
-        if (!(ref in incoming)) state.refVersions.delete(ref);
-    }
-    for (const ref of Array.isArray(data.removedRefs) ? data.removedRefs : []) {
-      state.refs.delete(String(ref));
-      state.refVersions.delete(String(ref));
-    }
-    for (const [ref, control] of Object.entries(incoming))
-      if (control && typeof control === 'object') {
+    const remember = (value: unknown, replace: boolean) => {
+      const incoming = snapshotRefs.parse(value);
+      if (replace) {
+        state.refs.clear();
+        for (const ref of state.refVersions.keys())
+          if (!(ref in incoming)) state.refVersions.delete(ref);
+      }
+      for (const [ref, control] of Object.entries(incoming)) {
         if (!state.refVersions.has(ref)) state.refVersions.set(ref, ++refSequence);
         state.refs.set(ref, {
-          role: String((control as { role?: unknown }).role ?? ''),
-          name: redactBrowserText(
-            String((control as { name?: unknown }).name ?? ''),
-            state.secrets,
-          ).slice(0, 300),
+          role: String(control.role ?? ''),
+          name: redactBrowserText(String(control.name ?? ''), state.secrets).slice(0, 300),
         });
       }
-    const page = redactBrowserText(String(data.snapshot ?? ''), state.secrets);
-    const end = Math.min(page.length, offset + snapshotChars);
+    };
+    const paged = (text: string) => {
+      const page = redactBrowserText(text, state.secrets);
+      const end = Math.min(page.length, offset + snapshotChars);
+      return {
+        text: `Page (${offset}-${end} of ${page.length} characters${end < page.length ? `; snapshot with offset ${end} continues` : ''}):\n${page.slice(offset, end)}`,
+        url: redactBrowserUrl(url, state.secrets),
+      };
+    };
+    if (scope) {
+      const data = await snapshot({ selector: scope });
+      if (await privateDocumentOpen(state, signal)) throw new BrowserLockedError();
+      remember(data.refs, false);
+      for (const ref of Array.isArray(data.removedRefs) ? data.removedRefs : []) {
+        state.refs.delete(String(ref));
+        state.refVersions.delete(String(ref));
+      }
+      return paged(String(data.snapshot ?? ''));
+    }
+    const tree = state.tree;
+    const full =
+      !tree || ['snapshot', 'open', 'tab_switch'].includes(input?.action ?? '') || offset > 0;
+    const response = z.looseObject({
+      kind: z.string(),
+      revision: z.number(),
+      baseRevision: z.number().optional(),
+      tree: z.string().optional(),
+      refs: z.unknown().optional(),
+      treeChange: z.unknown().optional(),
+      changes: z.unknown().optional(),
+    });
+    const reply = await snapshot({ delta: true, ...(full ? { full: true } : {}) });
+    if (typeof reply.snapshot === 'string') {
+      if (await privateDocumentOpen(state, signal)) throw new BrowserLockedError();
+      state.tree = undefined;
+      remember(reply.refs, true);
+      return paged(reply.snapshot);
+    }
+    let data = response.parse(reply.snapshot);
+    if (data.kind !== 'full' && data.baseRevision !== tree?.revision)
+      data = response.parse((await snapshot({ delta: true, full: true })).snapshot);
+    if (await privateDocumentOpen(state, signal)) throw new BrowserLockedError();
+    if (data.kind === 'full' || !tree) {
+      const text = data.tree ?? '';
+      state.tree = { lines: text.split('\n'), revision: data.revision };
+      remember(data.refs, true);
+      return paged(text);
+    }
+    tree.revision = data.revision;
+    if (data.kind === 'unchanged')
+      return { text: 'The page did not change.', url: redactBrowserUrl(url, state.secrets) };
+    const change = z
+      .object({
+        startLine: z.number().int().min(0),
+        deleteCount: z.number().int().min(0),
+        lines: z.array(z.string()),
+      })
+      .parse(data.treeChange);
+    const removed = tree.lines.splice(change.startLine, change.deleteCount, ...change.lines);
+    for (const item of z
+      .array(z.looseObject({ op: z.string(), ref: z.string(), node: z.unknown().optional() }))
+      .parse(data.changes ?? [])) {
+      const ref = item.ref.replace(/^@/, '');
+      if (item.op !== 'remove') remember({ [ref]: item.node }, false);
+      else {
+        state.refs.delete(ref);
+        state.refVersions.delete(ref);
+      }
+    }
+    const text = [
+      `The page changed at line ${change.startLine + 1}.`,
+      ...(removed.length ? [`Removed:\n${removed.join('\n')}`] : []),
+      ...(change.lines.length ? [`Now:\n${change.lines.join('\n')}`] : []),
+    ].join('\n');
+    if (text.length > changeChars) return paged(tree.lines.join('\n'));
     return {
-      text: `Page (${offset}-${end} of ${page.length} characters${end < page.length ? `; snapshot with offset ${end} continues` : ''}):\n${page.slice(offset, end)}`,
+      text: redactBrowserText(text, state.secrets),
       url: redactBrowserUrl(url, state.secrets),
     };
   }

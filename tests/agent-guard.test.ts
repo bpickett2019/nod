@@ -2029,6 +2029,96 @@ test('browser checks retain successful named checkbox choices only on their page
   assert.deepEqual(seen.find(({ selector }) => selector === '@other-save')?.typed, []);
 });
 
+test('browser steps run in order through the same checks and stop at the first step that needs the owner', async () => {
+  const url = 'https://example.com/form';
+  const acted: string[] = [];
+  const seen: Array<{ selector?: string; typed: string[] }> = [];
+  let result: unknown;
+  let navigating: unknown;
+  await fixture(
+    async (tools) => {
+      await call(tools, 'browser', { action: 'open', url });
+      result = await call(tools, 'browser', {
+        action: 'steps',
+        steps: [
+          { action: 'fill', selector: '@name', text: 'Synthetic Ann' },
+          { action: 'check', selector: '@gift' },
+          { action: 'click', selector: '@blocked' },
+          { action: 'click', selector: '@after' },
+        ],
+      });
+      navigating = await call(tools, 'browser', {
+        action: 'steps',
+        steps: [
+          { action: 'open', url },
+          { action: 'open', url },
+          { action: 'fill', selector: '@missing', text: 'Synthetic' },
+          { action: 'fill', selector: '@name', text: 'Never run' },
+        ],
+      });
+      await assert.rejects(
+        call(tools, 'browser', {
+          action: 'steps',
+          steps: [{ action: 'fill', selector: '@name', text: '<order number>' }],
+        }),
+        /Fill the placeholder/,
+      );
+    },
+    {
+      browserStep: async ({ step, typed }) => {
+        seen.push({ selector: step.selector, typed: [...typed] });
+        return step.selector === '@blocked' ? { result: 'Synthetic owner approval needed' } : 'run';
+      },
+    },
+    {
+      computer: fakeComputer({
+        currentPage: async (_id, step) => ({
+          origin: new URL(url).origin,
+          url,
+          controls: step?.selector === '@gift' ? [{ role: 'checkbox', name: 'Gift' }] : [],
+        }),
+        act: async (_id, step) => {
+          acted.push(`${step.action} ${step.selector ?? step.url}`);
+          if (step.selector === '@missing') throw new Error('Synthetic missing control');
+          if (['check', 'click'].includes(step.action)) assert.equal(step.expectUrl, url);
+          return {
+            url,
+            text:
+              step.action === 'open'
+                ? `Page (0-20 of 20 characters):\nSynthetic page ${acted.length}`
+                : `Changed ${step.selector}`,
+          };
+        },
+      }),
+    },
+  );
+  assert.deepEqual(acted, [
+    `open ${url}`,
+    'fill @name',
+    'check @gift',
+    `open ${url}`,
+    `open ${url}`,
+    'fill @missing',
+  ]);
+  assert.deepEqual(seen.find(({ selector }) => selector === '@blocked')?.typed, [
+    'Synthetic Ann',
+    'Checked: Gift',
+  ]);
+  const text = JSON.stringify(result);
+  assert.match(text, /1\. fill @name:\\nURL: https:\/\/example\.com\/form\\nChanged @name/);
+  assert.match(
+    text,
+    /3\. click @blocked: stopped before running\.\\nSynthetic owner approval needed/,
+  );
+  assert.match(text, /Steps 4-4 did not run/);
+  const loaded = JSON.stringify(navigating);
+  assert.match(loaded, /A page loaded; a later step shows the current page/);
+  assert.ok(!loaded.includes('Synthetic page 4'));
+  assert.match(loaded, /Synthetic page 5/);
+  assert.match(loaded, /3\. fill @missing: failed\. Synthetic missing control/);
+  assert.match(loaded, /Steps 4-4 did not run/);
+});
+
 test('browser handoff requires a live page, binds its session and stops further work without a link', async () => {
   const sessionId = randomUUID();
   let opened = false;
