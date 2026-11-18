@@ -20,6 +20,7 @@ import { pool } from './db.ts';
 import {
   accessOrigin,
   authToken,
+  cloudflareAccess,
   configuration,
   dataRoot,
   desktopAccess,
@@ -42,6 +43,7 @@ import {
 } from './thread.ts';
 import { isMessageReaction } from '../shared/emoji.ts';
 import { accessKey, registerLocalAccess } from './access.ts';
+import { cloudflareAccessIdentity } from './cloudflare-access.ts';
 import { logFailure, withFailureLog, type FailureLogSink } from './failure-log.ts';
 import { fileBytes } from '../shared/files.ts';
 import { BrowserActionError, type Computer } from '../ports/computer.ts';
@@ -267,6 +269,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
           key: authToken ?? (await accessKey(dataRoot)),
           origin: accessOrigin,
           bearer: authToken !== undefined,
+          ...(cloudflareAccess && { identity: cloudflareAccessIdentity(cloudflareAccess) }),
         },
   );
   if (desktopAccess && dependencies.admission) registerWorkAdmission(app, dependencies.admission);

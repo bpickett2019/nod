@@ -40,18 +40,21 @@ For a direct source install, stop and start the Nod process. The desktop app doe
 
 ## Server and data
 
-| Variable                  | What it does                                                                                                                                                         | Default                                             |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `PORT`                    | The local port for the app and API.                                                                                                                                  | `4310`                                              |
-| `NOD_HOST`                | The address the server listens on. Use `0.0.0.0` inside the self-hosting container. A non-loopback address requires `NOD_AUTH_TOKEN`.                                | `127.0.0.1`                                         |
-| `NOD_AUTH_TOKEN`          | The access token for the web and desktop clients: at least 43 letters, digits, `_`, or `-`. Required for a remote bind or public URL. Never printed in startup logs. | Unset; local installs generate a private access key |
-| `NOD_DATA_ROOT`           | The folder for local data: sessions, workspace files and the access key.                                                                                             | `.local`                                            |
-| `NOD_POSTGRES_PASSWORD`   | The password of the local PostgreSQL container. `pnpm start` generates one and saves it. A value you set needs at least 43 letters, digits, `_` or `-`.              | Generated                                           |
-| `DATABASE_URL`            | The PostgreSQL connection. `pnpm start` fills it in for the local container on `127.0.0.1:54329`. Set another URL to use your own database.                          | Local container                                     |
-| `DATABASE_POOL_MAX`       | The most database connections the server opens.                                                                                                                      | `12`                                                |
-| `NOD_PUBLIC_URL`          | The exact origin you open Nod at. Remote origins require HTTPS and `NOD_AUTH_TOKEN`. No path, query, fragment, or user credentials. Loopback origins can use HTTP.   | `http://localhost:<PORT>`                           |
-| `NOD_PRIVACY_NOTICE_FILE` | A Markdown privacy notice served at `/privacy`.                                                                                                                      | No notice                                           |
-| `NOD_ORG_SKILLS`          | A folder of your organization's task guides, read next to the built-in ones. On a Docker server, give the folder on the host; Compose mounts it read-only into the server. See [Organization guides](/how-it-works/skills/#organization-guides). | None                                                |
+| Variable                      | What it does                                                                                                                                                                                                                                               | Default                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `PORT`                        | The local port for the app and API.                                                                                                                                                                                                                        | `4310`                                              |
+| `NOD_HOST`                    | The address the server listens on. Use `0.0.0.0` inside the self-hosting container. A non-loopback address requires `NOD_AUTH_TOKEN`.                                                                                                                      | `127.0.0.1`                                         |
+| `NOD_AUTH_TOKEN`              | The access token for the web and desktop clients: at least 43 letters, digits, `_`, or `-`. Required for a remote bind or public URL. Never printed in startup logs.                                                                                       | Unset; local installs generate a private access key |
+| `NOD_CLOUDFLARE_ACCESS_TEAM`  | Your Cloudflare Zero Trust team domain, such as `example.cloudflareaccess.com`. With the next two settings, it lets the owner's Cloudflare Access sign-in replace the access token. See [Sign in with Cloudflare Access](#sign-in-with-cloudflare-access). | Unset                                               |
+| `NOD_CLOUDFLARE_ACCESS_AUD`   | The Application Audience (AUD) tag of the Cloudflare Access application in front of this Nod.                                                                                                                                                              | Unset                                               |
+| `NOD_CLOUDFLARE_ACCESS_EMAIL` | The email address of this Nod's owner. Nod accepts a Cloudflare Access sign-in only for this address.                                                                                                                                                      | Unset                                               |
+| `NOD_DATA_ROOT`               | The folder for local data: sessions, workspace files and the access key.                                                                                                                                                                                   | `.local`                                            |
+| `NOD_POSTGRES_PASSWORD`       | The password of the local PostgreSQL container. `pnpm start` generates one and saves it. A value you set needs at least 43 letters, digits, `_` or `-`.                                                                                                    | Generated                                           |
+| `DATABASE_URL`                | The PostgreSQL connection. `pnpm start` fills it in for the local container on `127.0.0.1:54329`. Set another URL to use your own database.                                                                                                                | Local container                                     |
+| `DATABASE_POOL_MAX`           | The most database connections the server opens.                                                                                                                                                                                                            | `12`                                                |
+| `NOD_PUBLIC_URL`              | The exact origin you open Nod at. Remote origins require HTTPS and `NOD_AUTH_TOKEN`. No path, query, fragment, or user credentials. Loopback origins can use HTTP.                                                                                         | `http://localhost:<PORT>`                           |
+| `NOD_PRIVACY_NOTICE_FILE`     | A Markdown privacy notice served at `/privacy`.                                                                                                                                                                                                            | No notice                                           |
+| `NOD_ORG_SKILLS`              | A folder of your organization's task guides, read next to the built-in ones. On a Docker server, give the folder on the host; Compose mounts it read-only into the server. See [Organization guides](/how-it-works/skills/#organization-guides).           | None                                                |
 
 App sign-in pages and callbacks use `NOD_PUBLIC_URL`, including through an SSH tunnel. See [Connect apps on the server](/deploy/self-host/#connect-apps-on-the-server). You can write `NOD_PUBLIC_URL` with or without the default port (`:443` for HTTPS, `:80` for HTTP). Nod uses the form without it. If Nod shows [This host is not permitted.](/deploy/troubleshooting/#this-host-is-not-permitted), the request's `Host` header does not match the configured host. Check the browser address and make sure your reverse proxy preserves the public `Host` header.
 
@@ -60,6 +63,18 @@ The access token grants full access to this server's assistant. `setup.sh` gener
 Omit `NOD_AUTH_TOKEN` and `NOD_PUBLIC_URL` from a local source configuration when you don't set them. An explicitly empty value is invalid. The Docker setup fills both in.
 
 Changing `NOD_AUTH_TOKEN` and [applying the configuration](#apply-configuration-changes) revokes the previous token. Reconnect your web and desktop clients with the new token. See [Rotate access](/deploy/server-operations/#rotate-access).
+
+### Sign in with Cloudflare Access
+
+When a [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) application protects the Nod's public address, its owner can sign in with Cloudflare instead of entering the access token. Set all three `NOD_CLOUDFLARE_ACCESS_*` settings and [apply the configuration](#apply-configuration-changes).
+
+Nod then accepts a request when it carries Cloudflare's signed sign-in assertion and all of these hold:
+
+- Cloudflare's published keys for your team domain verify the signature.
+- It was issued by your team domain, for this application's audience tag, and hasn't expired.
+- Its email matches `NOD_CLOUDFLARE_ACCESS_EMAIL`.
+
+Anyone else who passes the Cloudflare policy, such as a coworker on the same domain, still needs the access token. The token keeps working for the desktop app and scripts. Find the audience tag under **Access controls**, **Applications**, then the application's **Additional settings**. All three settings must be set together; Nod doesn't start with only some of them.
 
 For a remote server, set both values before starting:
 

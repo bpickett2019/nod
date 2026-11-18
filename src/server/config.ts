@@ -3,8 +3,10 @@ import { isAbsolute, resolve } from 'node:path';
 import type { Configuration } from '../shared/contracts.ts';
 import { z } from 'zod';
 import { serverNetwork } from './network.ts';
+import { cloudflareAccessSettings } from './cloudflare-access.ts';
 
 export const { port, host, publicOrigin, authToken, accessOrigin } = serverNetwork(process.env);
+export const cloudflareAccess = cloudflareAccessSettings(process.env);
 export const desktopMode = process.env.NOD_DESKTOP === 'true';
 export const ownerId = desktopMode
   ? z.uuid().parse(process.env.NOD_DESKTOP_OWNER_ID).toLowerCase()

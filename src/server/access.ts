@@ -33,7 +33,13 @@ export const accessCookie = (port: number) => `nod-access-${port}`;
 export function registerLocalAccess(
   app: FastifyInstance,
   port: number,
-  access: { key: string; desktop?: boolean; origin?: string; bearer?: boolean },
+  access: {
+    key: string;
+    desktop?: boolean;
+    origin?: string;
+    bearer?: boolean;
+    identity?: (request: FastifyRequest) => Promise<boolean>;
+  },
 ) {
   const desktop = access.desktop === true;
   const origin = access.origin ? new URL(access.origin) : undefined;
@@ -138,7 +144,8 @@ export function registerLocalAccess(
       (path === '/api' ||
         path.startsWith('/api/') ||
         request.routeOptions.url?.startsWith('/api/')) &&
-      !matches(presented(request))
+      !matches(presented(request)) &&
+      !(access.identity && !desktop && (await access.identity(request)))
     )
       return reply.code(401).send({
         error: desktop
