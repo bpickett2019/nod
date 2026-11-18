@@ -28,12 +28,13 @@ const claims = (overrides: object = {}) => ({
 const request = (value?: string) =>
   ({ headers: value ? { 'cf-access-jwt-assertion': value } : {} }) as FastifyRequest;
 
-test('only a Cloudflare Access sign-in for this Nod’s owner is accepted', async () => {
+test('only a Cloudflare Access sign-in for an allowed email is accepted', async () => {
   const identity = cloudflareAccessIdentity(
-    { team, audience, email: 'owner@example.com' },
+    { team, audience, emails: ['owner@example.com', 'admin@example.com'] },
     fetcher,
   );
   assert.equal(await identity(request(assertion(claims()))), true);
+  assert.equal(await identity(request(assertion(claims({ email: 'admin@example.com' })))), true);
   assert.equal(await identity(request()), false);
   assert.equal(await identity(request(assertion(claims(), stranger.privateKey))), false);
   assert.equal(

@@ -47,7 +47,7 @@ For a direct source install, stop and start the Nod process. The desktop app doe
 | `NOD_AUTH_TOKEN`              | The access token for the web and desktop clients: at least 43 letters, digits, `_`, or `-`. Required for a remote bind or public URL. Never printed in startup logs.                                                                                       | Unset; local installs generate a private access key |
 | `NOD_CLOUDFLARE_ACCESS_TEAM`  | Your Cloudflare Zero Trust team domain, such as `example.cloudflareaccess.com`. With the next two settings, it lets the owner's Cloudflare Access sign-in replace the access token. See [Sign in with Cloudflare Access](#sign-in-with-cloudflare-access). | Unset                                               |
 | `NOD_CLOUDFLARE_ACCESS_AUD`   | The Application Audience (AUD) tag of the Cloudflare Access application in front of this Nod.                                                                                                                                                              | Unset                                               |
-| `NOD_CLOUDFLARE_ACCESS_EMAIL` | The email address of this Nod's owner. Nod accepts a Cloudflare Access sign-in only for this address.                                                                                                                                                      | Unset                                               |
+| `NOD_CLOUDFLARE_ACCESS_EMAIL` | The email addresses allowed into this Nod, separated by commas: its owner, and an administrator if you have one. Nod accepts a Cloudflare Access sign-in only for these addresses.                                                                         | Unset                                               |
 | `NOD_DATA_ROOT`               | The folder for local data: sessions, workspace files and the access key.                                                                                                                                                                                   | `.local`                                            |
 | `NOD_POSTGRES_PASSWORD`       | The password of the local PostgreSQL container. `pnpm start` generates one and saves it. A value you set needs at least 43 letters, digits, `_` or `-`.                                                                                                    | Generated                                           |
 | `DATABASE_URL`                | The PostgreSQL connection. `pnpm start` fills it in for the local container on `127.0.0.1:54329`. Set another URL to use your own database.                                                                                                                | Local container                                     |
@@ -72,7 +72,7 @@ Nod then accepts a request when it carries Cloudflare's signed sign-in assertion
 
 - Cloudflare's published keys for your team domain verify the signature.
 - It was issued by your team domain, for this application's audience tag, and hasn't expired.
-- Its email matches `NOD_CLOUDFLARE_ACCESS_EMAIL`.
+- Its email is one of those in `NOD_CLOUDFLARE_ACCESS_EMAIL`.
 
 Anyone else who passes the Cloudflare policy, such as a coworker on the same domain, still needs the access token. The token keeps working for the desktop app and scripts. Find the audience tag under **Access controls**, **Applications**, then the application's **Additional settings**. All three settings must be set together; Nod doesn't start with only some of them.
 

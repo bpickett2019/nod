@@ -1,12 +1,16 @@
 import { createPublicKey, verify, type JsonWebKey, type KeyObject } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
 
-export type CloudflareAccess = { team: string; audience: string; email: string };
+export type CloudflareAccess = { team: string; audience: string; emails: string[] };
 
 export function cloudflareAccessSettings(env: NodeJS.ProcessEnv): CloudflareAccess | undefined {
   const team = env.NOD_CLOUDFLARE_ACCESS_TEAM;
   const audience = env.NOD_CLOUDFLARE_ACCESS_AUD;
   const email = env.NOD_CLOUDFLARE_ACCESS_EMAIL;
+  const emails = (email ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
   if (!team && !audience && !email) return undefined;
   if (!team || !/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(team))
     throw new Error(
@@ -16,9 +20,11 @@ export function cloudflareAccessSettings(env: NodeJS.ProcessEnv): CloudflareAcce
     throw new Error(
       'Set NOD_CLOUDFLARE_ACCESS_AUD to the application audience tag from Cloudflare Access.',
     );
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-    throw new Error('Set NOD_CLOUDFLARE_ACCESS_EMAIL to the email address of this Nod’s owner.');
-  return { team, audience, email: email.toLowerCase() };
+  if (!emails.length || emails.some((value) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)))
+    throw new Error(
+      'Set NOD_CLOUDFLARE_ACCESS_EMAIL to the email addresses allowed into this Nod, separated by commas.',
+    );
+  return { team, audience, emails };
 }
 
 export function cloudflareAccessIdentity(
@@ -79,7 +85,7 @@ export function cloudflareAccessIdentity(
         claims.exp > now &&
         (typeof claims.nbf !== 'number' || claims.nbf <= now + 60) &&
         typeof claims.email === 'string' &&
-        claims.email.toLowerCase() === settings.email
+        settings.emails.includes(claims.email.toLowerCase())
       );
     } catch {
       return false;
